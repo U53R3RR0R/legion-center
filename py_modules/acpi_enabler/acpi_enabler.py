@@ -191,6 +191,36 @@ class AcpiEnabler:
             log=self._log, warn=self._warn,
         )
 
+    def distro_family(self):
+        """Identify distro families that need different immutable-root handling."""
+        os_release = Path('/etc/os-release')
+        try:
+            values = {}
+            for line in os_release.read_text(errors='ignore').splitlines():
+                if '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                values[key.lower()] = value.strip().strip('"').lower()
+        except OSError:
+            values = {}
+
+        distro_id = values.get('id', '')
+        variant_id = values.get('variant_id', '')
+        id_like = values.get('id_like', '')
+        pretty_name = values.get('pretty_name', '')
+        if (
+            distro_id == 'bazzite'
+            or variant_id == 'bazzite'
+            or 'bazzite' in pretty_name
+            or 'bazzite' in id_like
+        ):
+            return 'bazzite'
+        if distro_id in ('steamos', 'steamos2') or 'steamos' in pretty_name:
+            return 'steamos'
+        if shutil.which('rpm-ostree') is not None and Path('/run/ostree-booted').exists():
+            return 'rpm-ostree'
+        return 'other'
+
     # ------------------------------------------------------------ logging
     def _colorize(self, color, text):
         if not sys.stdout.isatty():
@@ -298,10 +328,15 @@ class AcpiEnabler:
 
     # -------------------------------------------------------------- steps
     def prep_steamos(self):
+        if self.distro_family() in ('bazzite', 'rpm-ostree'):
+            self._log('Immutable Fedora host detected; leaving the OS image unchanged')
+            return
         self._log('Disabling SteamOS read-only filesystem')
         self._run(['sudo', 'steamos-readonly', 'disable'])
 
     def finalize_steamos(self):
+        if self.distro_family() in ('bazzite', 'rpm-ostree'):
+            return
         self._log('Re-enabling SteamOS read-only filesystem')
         self._run(['sudo', 'steamos-readonly', 'enable'])
 
@@ -526,6 +561,70 @@ class AcpiEnabler:
             ['dkms', 'status', '-m', self.ACPI_CALL_MODULE, '-k', kernel_release],
         )
         return bool(result and 'installed' in (result.stdout or ''))
+
+    def _immutable_module_path(self, kernel_release=None):
+        settings_dir = os.environ.get('DECKY_PLUGIN_SETTINGS_DIR')
+        if not settings_dir:
+            self._die('DECKY_PLUGIN_SETTINGS_DIR is unavailable; cannot store the Bazzite module')
+        release = kernel_release or platform.release()
+        return Path(settings_dir) / 'acpi-call' / release / 'acpi_call.ko'
+
+    def _install_acpi_call_module_immutable(self):
+        kernel_release = platform.release()
+        module_path = self._immutable_module_path(kernel_release)
+        module_path.parent.mkdir(parents=True, exist_ok=True)
+        if not module_path.is_file():
+            headers = Path('/usr/lib/modules') / kernel_release / 'build'
+            try:
+                headers = headers.resolve(strict=True)
+            except OSError:
+                self._die(
+                    'Matching kernel-devel headers for %s are unavailable; '
+                    'fan support cannot be built without them' % kernel_release
+                )
+
+            podman = shutil.which('podman')
+            if not podman:
+                self._die('Podman is required to build fan support without layering host packages')
+            if shutil.which('git') is None:
+                self._die('Git is required to download the acpi_call source')
+            os_release = Path('/etc/os-release').read_text(errors='ignore')
+            version_match = re.search(r'^VERSION_ID="?([0-9]+)', os_release, re.M)
+            if not version_match:
+                self._die('Could not determine the Fedora version for the build container')
+
+            version, tag = self._resolve_acpi_call_version()
+            build_root = self.workdir / 'bazzite-acpi-call-build'
+            source_dir = build_root / 'source'
+            headers_copy = build_root / 'kernel-devel'
+            shutil.rmtree(build_root, ignore_errors=True)
+            build_root.mkdir(parents=True, exist_ok=True)
+            try:
+                self._run(
+                    ['git', 'clone', '--depth', '1', '--branch', tag,
+                     self.ACPI_CALL_REPO, str(source_dir)]
+                )
+                shutil.copytree(headers, headers_copy, symlinks=True)
+                self._log('Building acpi_call in a disposable Fedora container')
+                self._run([
+                    podman, 'run', '--rm', '--pull=missing',
+                    '--volume', '%s:/source:Z' % source_dir,
+                    '--volume', '%s:/kernel-devel:ro,Z' % headers_copy,
+                    '--volume', '%s:/output:Z' % module_path.parent,
+                    'registry.fedoraproject.org/fedora:%s' % version_match.group(1),
+                    'bash', '-lc',
+                    'dnf install --setopt=install_weak_deps=False -y gcc make '
+                    'elfutils-libelf-devel >/dev/null && '
+                    'make -C /kernel-devel M=/source modules && '
+                    'install -m 0644 /source/acpi_call.ko /output/acpi_call.ko',
+                ])
+            finally:
+                shutil.rmtree(build_root, ignore_errors=True)
+
+        if not Path('/proc/acpi/call').is_file():
+            self._run(['sudo', '-n', 'insmod', str(module_path)])
+        if not Path('/proc/acpi/call').is_file():
+            self._die('acpi_call loaded without creating /proc/acpi/call')
 
     def _resolve_acpi_call_version(self):
         """Resolve the latest release tag of acpi_call from its git repo.
@@ -1083,16 +1182,19 @@ class AcpiEnabler:
             readonly_disabled = True
 
             kernel_release = platform.release()
-            if not self._acpi_call_installed(kernel_release):
-                modules_path, headers_path = self.download_kernel_packages()
-                self.install_kernel_packages(modules_path, headers_path)
+            if self.distro_family() in ('bazzite', 'rpm-ostree'):
+                self._install_acpi_call_module_immutable()
+            else:
+                if not self._acpi_call_installed(kernel_release):
+                    modules_path, headers_path = self.download_kernel_packages()
+                    self.install_kernel_packages(modules_path, headers_path)
 
-            self.install_acpi_call_module()
-            if not self._acpi_call_installed(kernel_release):
-                self._die(
-                    'acpi_call is not installed for the running kernel %s'
-                    % kernel_release
-                )
+                self.install_acpi_call_module()
+                if not self._acpi_call_installed(kernel_release):
+                    self._die(
+                        'acpi_call is not installed for the running kernel %s'
+                        % kernel_release
+                    )
             if not Path('/proc/acpi/call').is_file():
                 self._die('acpi_call loaded without creating /proc/acpi/call')
         finally:
@@ -1113,11 +1215,14 @@ class AcpiEnabler:
         reboot before disable() was run), which is not an error here.
         """
         self._log('Unloading acpi_call module')
-        self._run_quiet(['sudo', 'modprobe', '-r', self.ACPI_CALL_MODULE])
+        if self.distro_family() in ('bazzite', 'rpm-ostree'):
+            self._run_quiet(['sudo', '-n', 'rmmod', self.ACPI_CALL_MODULE])
+        else:
+            self._run_quiet(['sudo', 'modprobe', '-r', self.ACPI_CALL_MODULE])
 
-        modules_load_conf = Path('/etc/modules-load.d/acpi_call.conf')
-        if modules_load_conf.exists():
-            self._run_quiet(['sudo', 'rm', '-f', str(modules_load_conf)])
+            modules_load_conf = Path('/etc/modules-load.d/acpi_call.conf')
+            if modules_load_conf.exists():
+                self._run_quiet(['sudo', 'rm', '-f', str(modules_load_conf)])
 
     def _remove_acpi_call_dkms(self):
         """Unregister acpi_call from dkms for every version it's built as.
@@ -1215,8 +1320,16 @@ class AcpiEnabler:
             self.prep_steamos()
             readonly_disabled = True
             self._unload_acpi_call_module()
-            self._remove_acpi_call_dkms()
-            self._teardown_selfheal_updates()
+            if self.distro_family() in ('bazzite', 'rpm-ostree'):
+                module_path = self._immutable_module_path()
+                module_path.unlink(missing_ok=True)
+                try:
+                    module_path.parent.rmdir()
+                except OSError:
+                    pass
+            else:
+                self._remove_acpi_call_dkms()
+                self._teardown_selfheal_updates()
         finally:
             if readonly_disabled:
                 self.finalize_steamos()

@@ -67,8 +67,8 @@ export const usePowerLed = () => {
 };
 
 // The backend enable/disable acpi_call dkms operation can legitimately take
-// several minutes (downloading kernel packages, building/registering a DKMS
-// module). Unlike the other toggles above, this one is NOT wired through
+// several minutes (downloading headers, building/registering a kernel module).
+// Unlike the other toggles above, this one is NOT wired through
 // uiSliceMiddleware's fire-and-forget pattern -- the hook awaits the backend
 // call itself so it can drive a busy/error state the UI can show a spinner
 // and error message for while the operation is in flight.

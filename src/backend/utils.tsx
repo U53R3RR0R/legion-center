@@ -75,14 +75,33 @@ export const extractCurrentGameId = () =>
 
 export const getLatestVersionNum = async () => {
   const response = await fetchNoCors(
-    'https://raw.githubusercontent.com/InnoVision-Games/legion-center/main/package.json',
+    'https://api.github.com/repos/U53R3RR0R/legion-center/releases?per_page=100',
     { method: 'GET' }
   );
 
   const body = await response.text();
   if (body && typeof body === 'string') {
     try {
-      return JSON.parse(body)['version'];
+      const releases = JSON.parse(body) as Array<{
+        draft: boolean;
+        tag_name: string;
+        published_at?: string;
+        assets: Array<{ name: string }>;
+      }>;
+      const latestRelease = releases
+        .filter(
+          (release) =>
+            !release.draft &&
+            release.assets.some(
+              (asset) =>
+                asset.name.startsWith('LegionCenter-') &&
+                asset.name.endsWith('.tar.gz')
+            )
+        )
+        .sort((a, b) =>
+          (b.published_at || '').localeCompare(a.published_at || '')
+        )[0];
+      return latestRelease?.tag_name.replace(/^v/, '') || '';
     } catch {
       return '';
     }
