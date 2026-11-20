@@ -25,6 +25,14 @@ def _child_env():
     return env
 
 
+def _service_domain_cannot_load_modules():
+    try:
+        context = Path("/proc/self/attr/current").read_text().strip()
+    except OSError:
+        return False
+    return ":unconfined_service_t:" in context
+
+
 def ensure_acpi_call_available(
     proc_path: Path = DEFAULT_ACPI_CALL_PATH,
     runner: Callable = subprocess.run,
@@ -32,6 +40,8 @@ def ensure_acpi_call_available(
     """Load ``acpi_call`` when needed and verify that its proc file exists."""
     if proc_path.is_file():
         return True
+    if _service_domain_cannot_load_modules():
+        return False
 
     try:
         result = runner(

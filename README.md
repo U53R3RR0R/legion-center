@@ -155,14 +155,19 @@ after an update, select **Repair Fan Support** from the same panel.
 
 Fan support builds `acpi_call` in a temporary Fedora container using the
 running kernel's matching `kernel-devel` tree. It requires Podman, Git, and
-those matching headers to be available. The resulting module is kept under
-Decky's persistent plugin settings and loaded directly; this path does not use
-`rpm-ostree`, layer packages, or write to the host's `/usr` or `/etc`. The
-module is specific to the running kernel, so run **Repair Fan Support** after
-a kernel update. The installer restores the module directory's SELinux labels
-if an earlier alpha build marked it for container-only use. Controller
-remapping, the power LED, touchpad/gyro, and supported charge-limit controls
-do not require this fan-support backend.
+those matching headers to be available. It does not use `rpm-ostree`, layer
+packages, or modify the OSTree image. On SELinux-enabled systems, installation
+adds a narrowly scoped policy to the mutable SELinux policy store and a systemd
+service at `/etc/systemd/system/legion-center-acpi-call.service`; the managed
+loader and module live under `/var/lib/legion-center`. Only the dedicated
+loader domain receives permission to load modules, and its fixed helper opens
+only the root-owned managed module. Decky's service receives no additional
+module-loading permission. The loader starts at boot and is refreshed by
+**Repair Fan Support** after a kernel update. Disabling fan support removes the
+service and policy; on enforcing SELinux, a module already loaded in the
+current session can remain active until reboot.
+Controller remapping, the power LED, touchpad/gyro, and supported charge-limit
+controls do not require this fan-support backend.
 
 # Troubleshooting / Frequently Asked Questions
 

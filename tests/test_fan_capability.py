@@ -23,6 +23,23 @@ class FanCapabilityTests(unittest.TestCase):
         )
         self.assertTrue(result)
 
+    def test_denied_service_domain_does_not_retry_module_loading(self):
+        with patch(
+            "py_modules.fan_capability.Path.read_text",
+            return_value="system_u:system_r:unconfined_service_t:s0",
+        ), patch(
+            "py_modules.fan_capability.Path.is_file",
+            return_value=False,
+        ):
+            self.assertFalse(
+                fan_capability.ensure_acpi_call_available(
+                    self.proc_path,
+                    runner=lambda *_args, **_kwargs: self.fail(
+                        "module loading must not be retried from this domain"
+                    ),
+                )
+            )
+
     def test_successful_modprobe_requires_proc_file(self):
         def runner(*_args, **_kwargs):
             self.proc_path.touch()
