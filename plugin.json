@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["root"],
-    "description": "Legion Go button remapping, fan control, power LED, and charge limit control",
-    "image": "https://opengraph.githubassets.com/1/InnoVision-Games/legion-center"
+    "description": "Legion Go (Z1E) controller remapping, fan controls, power LED, and charge limits on SteamOS and Bazzite.",
+    "image": "https://opengraph.githubassets.com/1/U53R3RR0R/legion-center"
   }
 }

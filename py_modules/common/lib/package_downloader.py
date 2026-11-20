@@ -57,7 +57,7 @@ _SYSTEM_CA_BUNDLES = (
 )
 
 
-def _default_ssl_context():
+def default_ssl_context():
     """Build an SSL context pinned to the system's own CA bundle if found.
 
     Returns:
@@ -139,7 +139,7 @@ class PackageDownloader:
         """
         try:
             req = urllib.request.Request(url, method='HEAD')
-            with urllib.request.urlopen(req, context=_default_ssl_context()) as resp:
+            with urllib.request.urlopen(req, context=default_ssl_context()) as resp:
                 return 200 <= resp.status < 300
         except Exception as exc:
             # Still returns False either way (a genuine 404 and a network/
@@ -183,7 +183,7 @@ class PackageDownloader:
 
         part = dest.with_suffix(dest.suffix + '.part')
         try:
-            with urllib.request.urlopen(url, context=_default_ssl_context()) as resp, \
+            with urllib.request.urlopen(url, context=default_ssl_context()) as resp, \
                     open(part, 'wb') as f:
                 shutil.copyfileobj(resp, f)
             part.rename(dest)

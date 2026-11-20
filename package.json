@@ -1,7 +1,7 @@
 {
   "name": "legion-center",
-  "version": "0.1.1",
-  "description": "A Decky Loader plugin for Legion Go controller remapping, fan control, and power LED management",
+  "version": "0.2.0-alpha.1",
+  "description": "A Decky Loader plugin for Legion Go (Z1E) controller remapping, fan controls, power LED, and charge limits on SteamOS and Bazzite",
   "type": "module",
   "scripts": {
     "build": "shx rm -rf dist && rollup -c",
@@ -12,7 +12,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/InnoVision-Games/legion-center.git"
+    "url": "git+https://github.com/U53R3RR0R/legion-center.git"
   },
   "keywords": [
     "decky",
@@ -24,9 +24,9 @@
   "author": "InnoVision Games <innovisiongames@gmail.com>",
   "license": "BSD-3-Clause",
   "bugs": {
-    "url": "https://github.com/InnoVision-Games/legion-center/issues"
+    "url": "https://github.com/U53R3RR0R/legion-center/issues"
   },
-  "homepage": "https://github.com/InnoVision-Games/legion-center#readme",
+  "homepage": "https://github.com/U53R3RR0R/legion-center#readme",
   "devDependencies": {
     "@decky/rollup": "^1.0.2",
     "@decky/ui": "^4.12.0",

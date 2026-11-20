@@ -10,6 +10,15 @@ from typing import Callable
 DEFAULT_ACPI_CALL_PATH = Path("/proc/acpi/call")
 
 
+def managed_module_path(kernel_release: str = None):
+    settings_dir = os.environ.get("DECKY_PLUGIN_SETTINGS_DIR")
+    if not settings_dir:
+        return None
+    release = kernel_release or platform.release()
+    module_path = Path(settings_dir) / "acpi-call" / release / "acpi_call.ko"
+    return module_path if module_path.is_file() else None
+
+
 def _child_env():
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = ""
@@ -34,8 +43,25 @@ def ensure_acpi_call_available(
             check=False,
         )
     except OSError:
-        return False
+        result = None
 
+    if result is not None and result.returncode == 0 and proc_path.is_file():
+        return True
+
+    module_path = managed_module_path()
+    if module_path is None:
+        return False
+    try:
+        result = runner(
+            ["sudo", "-n", "insmod", str(module_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_child_env(),
+            check=False,
+        )
+    except OSError:
+        return False
     return result.returncode == 0 and proc_path.is_file()
 
 
@@ -43,8 +69,11 @@ def dkms_installed_for_running_kernel(
     runner: Callable = subprocess.run,
     kernel_release: str = None,
 ) -> bool:
-    """Return whether DKMS reports acpi_call installed for this kernel."""
+    """Return whether acpi_call is available for this kernel."""
     release = kernel_release or platform.release()
+    if managed_module_path(release) is not None:
+        return True
+
     try:
         result = runner(
             ["dkms", "status", "-m", "acpi_call", "-k", release],

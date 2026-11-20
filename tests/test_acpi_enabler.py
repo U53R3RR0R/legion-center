@@ -41,6 +41,9 @@ class RecordingEnabler(AcpiEnabler):
     def finalize_steamos(self):
         self.calls.append("finalize")
 
+    def distro_family(self):
+        return "steamos"
+
     def _acpi_call_installed(self, _kernel_release):
         return self.installed
 
@@ -65,6 +68,17 @@ class RecordingEnabler(AcpiEnabler):
 
 
 class AcpiEnablerTests(unittest.TestCase):
+    def test_distro_family_detects_bazzite_os_release(self):
+        enabler = AcpiEnabler.__new__(AcpiEnabler)
+        os_release = "\n".join([
+            'NAME="Bazzite"',
+            'ID=bazzite',
+            'VARIANT="Bazzite"',
+            'VARIANT_ID=bazzite',
+        ])
+        with patch("pathlib.Path.read_text", return_value=os_release):
+            self.assertEqual(enabler.distro_family(), "bazzite")
+
     def test_run_raises_on_required_command_failure(self):
         enabler = RecordingEnabler()
         failed = SimpleNamespace(returncode=9, stdout="", stderr="bad command")

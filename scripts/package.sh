@@ -18,7 +18,7 @@ cd "${repo_dir}"
 pnpm run build
 
 mkdir -p "${plugin_dir}" "${artifact_dir}"
-cp LICENSE README.md THIRD_PARTY_NOTICES.md main.py package.json plugin.json requirements.txt "${plugin_dir}/"
+cp LICENSE README.md THIRD_PARTY_NOTICES.md main.py ota_update.sh package.json plugin.json requirements.txt "${plugin_dir}/"
 cp -R assets defaults dist py_modules "${plugin_dir}/"
 find "${plugin_dir}" -type d -name __pycache__ -prune -exec rm -rf {} +
 find "${plugin_dir}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete

@@ -2,40 +2,74 @@ import decky
 import subprocess
 import urllib.request
 import json
-import ssl
 import os
+from pathlib import Path
+from common.lib.package_downloader import PackageDownloader, default_ssl_context
 
 def download_latest_build():
-    # ssl._create_default_https_context = ssl._create_unverified_context
-    url = "http://api.github.com/repos/InnoVision-Games/legion-center/releases/latest"
+    url = "https://api.github.com/repos/U53R3RR0R/legion-center/releases?per_page=100"
 
-    gcontext = ssl.SSLContext()
+    with urllib.request.urlopen(url, context=default_ssl_context()) as response:
+        releases = json.load(response)
 
-    response = urllib.request.urlopen(url, context=gcontext)
-    json_data = json.load(response)
+    if not isinstance(releases, list):
+        raise RuntimeError("GitHub did not return a release list")
 
-    download_url = json_data.get("assets")[0].get("browser_download_url")
+    available = []
+    for release in releases:
+        if release.get("draft"):
+            continue
+        asset = next(
+            (
+                item for item in release.get("assets", [])
+                if item.get("name", "").startswith("LegionCenter-")
+                and item.get("name", "").endswith(".tar.gz")
+            ),
+            None,
+        )
+        if asset:
+            available.append((release.get("published_at") or "", release, asset))
 
-    decky.logger.info(download_url)
+    if not available:
+        raise RuntimeError("No published LegionCenter release archive was found")
 
-    file_path = '/tmp/LegionCenter.tar.gz'
+    _, release, asset = max(available, key=lambda item: item[0])
 
-    with urllib.request.urlopen(download_url, context=gcontext) as response, open(file_path, 'wb') as output_file:
-        output_file.write(response.read())
-        output_file.close()
+    download_url = asset["browser_download_url"]
+    decky.logger.info(
+        "Downloading Legion Center %s from %s" % (release.get("tag_name"), download_url)
+    )
 
-    return file_path
+    file_path = Path('/tmp/LegionCenter.tar.gz')
+    file_path.unlink(missing_ok=True)
+    downloader = PackageDownloader(file_path.parent)
+    return str(downloader.download(download_url, filename=file_path.name))
 
 def ota_update():
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = ""
-    downloaded_filepath = download_latest_build()
+    download_latest_build()
 
-    # install downloaded files
-    cmd = f'echo {decky.DECKY_USER_HOME}/homebrew/plugins/LegionCenter/ota_update.sh | HOME="{decky.DECKY_USER_HOME}" sh'
+    plugin_dir = Path(__file__).resolve().parent.parent
+    update_script = plugin_dir / "ota_update.sh"
+    if not update_script.is_file():
+        raise FileNotFoundError("Bundled update script is missing: %s" % update_script)
 
-    result = subprocess.run(cmd, shell=True, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    env["HOME"] = decky.DECKY_USER_HOME
+    result = subprocess.run(
+        ["bash", str(update_script)],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        cwd=str(plugin_dir),
+    )
 
+    if result.stdout:
+        decky.logger.info(result.stdout)
     if result.stderr:
         decky.logger.error(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError("Legion Center update failed with exit code %s" % result.returncode)
     return result

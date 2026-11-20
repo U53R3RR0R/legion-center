@@ -32,11 +32,13 @@ const AcpiCallPanel: FC = () => {
       <ConfirmModal
         strTitle="Install or repair fan support?"
         strDescription={
-          'Legion Center will download the matching SteamOS kernel headers, build ' +
-          'acpi_call with DKMS, and verify the running interface. This can take ' +
-          'several minutes and needs an internet connection. Keep the device awake ' +
-          'until the status below changes. After a SteamOS kernel update, return here ' +
-          'and run Repair again. Desktop Mode is not required.'
+          'Legion Center will obtain the matching kernel headers, build ' +
+          'acpi_call, and verify the running interface. This can take ' +
+          'several minutes and needs an internet connection. On Bazzite, it builds ' +
+          'inside a temporary Podman container without layering host packages. ' +
+          'Keep the device awake until the status below changes. After a kernel ' +
+          'update, return here and run ' +
+          'Repair again. Desktop Mode is not required.'
         }
         strOKButtonText={acpiCallDkmsEnabled ? 'Repair' : 'Install'}
         onOK={() => {
