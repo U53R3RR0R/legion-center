@@ -35,7 +35,9 @@ const AcpiCallPanel: FC = () => {
           'Legion Center will obtain the matching kernel headers, build ' +
           'acpi_call, and verify the running interface. This can take ' +
           'several minutes and needs an internet connection. On Bazzite, it builds ' +
-          'inside a temporary Podman container without layering host packages. ' +
+          'inside a temporary Podman container without layering host packages; ' +
+          'SELinux-enabled systems also install a dedicated loader policy and ' +
+          'system service so the plugin does not need broad module-loading access. ' +
           'Keep the device awake until the status below changes. After a kernel ' +
           'update, return here and run ' +
           'Repair again. Desktop Mode is not required.'

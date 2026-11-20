@@ -28,13 +28,16 @@
 
 """Enables Linux DKMS ACPI calls on the running SteamOS system."""
 
+import hashlib
 import json
 import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -112,6 +115,13 @@ class AcpiEnabler:
     # pin_pkg()/pacman like everything else this project installs.
     ACPI_CALL_REPO = 'https://github.com/nix-community/acpi_call.git'
     ACPI_CALL_MODULE = 'acpi_call'
+    IMMUTABLE_LOADER_ROOT = Path('/var/lib/legion-center')
+    IMMUTABLE_LOADER_CACHE = Path('/var/cache/legion-center/acpi-call-loader')
+    IMMUTABLE_LOADER_BINARY = IMMUTABLE_LOADER_ROOT / 'acpi-call-loader'
+    IMMUTABLE_LOADER_MODULE = IMMUTABLE_LOADER_ROOT / 'acpi_call.ko'
+    IMMUTABLE_LOADER_UNIT_NAME = 'legion-center-acpi-call.service'
+    IMMUTABLE_LOADER_UNIT = Path('/etc/systemd/system') / IMMUTABLE_LOADER_UNIT_NAME
+    IMMUTABLE_LOADER_POLICY_NAME = 'legion_center_acpi_loader'
 
     # SteamOS's live package database is NOT at pacman's default
     # /var/lib/pacman -- it lives here instead (same path
@@ -569,10 +579,163 @@ class AcpiEnabler:
         release = kernel_release or platform.release()
         return Path(settings_dir) / 'acpi-call' / release / 'acpi_call.ko'
 
+    def _restore_immutable_module_context(self, module_path):
+        labels = []
+        for path in (module_path.parent, module_path):
+            try:
+                labels.append(os.getxattr(str(path), 'security.selinux').decode(errors='replace'))
+            except OSError:
+                continue
+        if not any('container_file_t' in label for label in labels):
+            return
+
+        restorecon = shutil.which('restorecon')
+        if restorecon is None:
+            self._die(
+                'The module was labeled for container use by an earlier build. '
+                'Install policycoreutils or run restorecon on %s' % module_path.parent
+            )
+        self._log('Restoring the module directory SELinux labels after an earlier container build')
+        self._run(['sudo', '-n', restorecon, '-RF', str(module_path.parent)])
+
+    def _fedora_container_version(self):
+        os_release = Path('/etc/os-release').read_text(errors='ignore')
+        version_match = re.search(r'^VERSION_ID="?([0-9]+)', os_release, re.M)
+        if not version_match:
+            self._die('Could not determine the Fedora version for the build container')
+        return version_match.group(1)
+
+    def _selinux_enforcing(self):
+        try:
+            return Path('/sys/fs/selinux/enforce').read_text().strip() == '1'
+        except OSError:
+            return False
+
+    def _build_immutable_loader_artifacts(self, fedora_version):
+        source_dir = Path(__file__).with_name('selinux_loader')
+        source_files = (
+            source_dir / 'legion_center_acpi_loader.c',
+            source_dir / 'legion_center_acpi_loader.te',
+            source_dir / 'legion_center_acpi_loader.fc',
+        )
+        digest = hashlib.sha256(fedora_version.encode())
+        for source_file in source_files:
+            digest.update(source_file.name.encode())
+            digest.update(source_file.read_bytes())
+        artifact_dir = self.IMMUTABLE_LOADER_CACHE / digest.hexdigest()[:16]
+        helper_binary = artifact_dir / 'acpi-call-loader'
+        policy_package = artifact_dir / (self.IMMUTABLE_LOADER_POLICY_NAME + '.pp')
+
+        def trusted_root_file(path):
+            try:
+                details = path.lstat()
+            except OSError:
+                return False
+            return (
+                stat.S_ISREG(details.st_mode)
+                and details.st_uid == 0
+                and details.st_mode & 0o022 == 0
+            )
+
+        if trusted_root_file(helper_binary) and trusted_root_file(policy_package):
+            return helper_binary, policy_package
+
+        podman = shutil.which('podman')
+        if not podman:
+            self._die('Podman is required to build the SELinux module loader')
+
+        build_root = Path(tempfile.mkdtemp(prefix='legion-center-acpi-loader-'))
+        build_source = build_root / 'source'
+        output_dir = build_root / 'output'
+        build_source.mkdir(parents=True)
+        output_dir.mkdir()
+        try:
+            shutil.copytree(source_dir, build_source, dirs_exist_ok=True)
+            self._run([
+                podman, 'run', '--rm', '--pull=missing',
+                '--volume', '%s:/source:Z' % build_source,
+                '--volume', '%s:/output:Z' % output_dir,
+                'registry.fedoraproject.org/fedora:%s' % fedora_version,
+                'bash', '-lc',
+                'dnf install --setopt=install_weak_deps=False -y gcc make '
+                'policycoreutils-devel selinux-policy-devel >/dev/null && '
+                'gcc -O2 -Wall -Wextra -Werror -o /output/acpi-call-loader '
+                '/source/legion_center_acpi_loader.c && '
+                'make -f /usr/share/selinux/devel/Makefile -C /source '
+                'legion_center_acpi_loader.pp && '
+                'install -m 0644 /source/legion_center_acpi_loader.pp '
+                '/output/%s.pp' % self.IMMUTABLE_LOADER_POLICY_NAME,
+            ])
+            self._run(['sudo', '-n', 'install', '-d', '-m', '0755',
+                       str(artifact_dir)])
+            self._run(['sudo', '-n', 'install', '-m', '0755',
+                       str(output_dir / 'acpi-call-loader'), str(helper_binary)])
+            self._run([
+                'sudo', '-n', 'install', '-m', '0644',
+                str(output_dir / (self.IMMUTABLE_LOADER_POLICY_NAME + '.pp')),
+                str(policy_package),
+            ])
+        finally:
+            shutil.rmtree(build_root, ignore_errors=True)
+        if not (trusted_root_file(helper_binary) and trusted_root_file(policy_package)):
+            self._die('The cached acpi_call loader artifacts are not root-owned regular files')
+        return helper_binary, policy_package
+
+    def _install_immutable_module_loader(self, module_path, fedora_version):
+        helper_binary, policy_package = self._build_immutable_loader_artifacts(
+            fedora_version
+        )
+        self._log('Installing the dedicated acpi_call module loader service')
+        self._run(['sudo', '-n', 'install', '-d', '-m', '0755',
+                   str(self.IMMUTABLE_LOADER_ROOT)])
+        self._run(['sudo', '-n', 'install', '-m', '0755',
+                   str(helper_binary), str(self.IMMUTABLE_LOADER_BINARY)])
+        self._run(['sudo', '-n', 'install', '-m', '0644',
+                   str(module_path), str(self.IMMUTABLE_LOADER_MODULE)])
+
+        unit_source = Path(__file__).with_name('selinux_loader') / (
+            'legion-center-acpi-call.service'
+        )
+        self._run(['sudo', '-n', 'install', '-D', '-m', '0644',
+                   str(unit_source), str(self.IMMUTABLE_LOADER_UNIT)])
+
+        selinux_enabled = Path('/sys/fs/selinux/enforce').is_file()
+        if selinux_enabled:
+            self._run(['sudo', '-n', 'semodule', '-i', str(policy_package)])
+            self._run(['sudo', '-n', 'restorecon', '-F',
+                       str(self.IMMUTABLE_LOADER_ROOT),
+                       str(self.IMMUTABLE_LOADER_BINARY),
+                       str(self.IMMUTABLE_LOADER_MODULE),
+                       str(self.IMMUTABLE_LOADER_UNIT)])
+
+        self._run(['sudo', '-n', 'systemctl', 'daemon-reload'])
+        self._run(['sudo', '-n', 'systemctl', 'enable',
+                   self.IMMUTABLE_LOADER_UNIT_NAME])
+        self._run(['sudo', '-n', 'systemctl', 'restart',
+                   self.IMMUTABLE_LOADER_UNIT_NAME])
+
+    def _remove_immutable_module_loader(self):
+        self._run_quiet(['sudo', '-n', 'systemctl', 'disable', '--now',
+                         self.IMMUTABLE_LOADER_UNIT_NAME])
+        self._run_quiet(['sudo', '-n', 'rm', '-f',
+                         str(self.IMMUTABLE_LOADER_UNIT)])
+        self._run_quiet(['sudo', '-n', 'systemctl', 'daemon-reload'])
+        if Path('/sys/fs/selinux/enforce').is_file():
+            self._run_quiet(['sudo', '-n', 'semodule', '-r',
+                             self.IMMUTABLE_LOADER_POLICY_NAME])
+        self._run_quiet(['sudo', '-n', 'rm', '-f',
+                         str(self.IMMUTABLE_LOADER_BINARY),
+                         str(self.IMMUTABLE_LOADER_MODULE)])
+        self._run_quiet(['sudo', '-n', 'restorecon', '-F',
+                         str(self.IMMUTABLE_LOADER_ROOT)])
+        self._run_quiet(['sudo', '-n', 'rmdir',
+                         str(self.IMMUTABLE_LOADER_ROOT)])
+
     def _install_acpi_call_module_immutable(self):
         kernel_release = platform.release()
         module_path = self._immutable_module_path(kernel_release)
         module_path.parent.mkdir(parents=True, exist_ok=True)
+        fedora_version = self._fedora_container_version()
         if not module_path.is_file():
             headers = Path('/usr/lib/modules') / kernel_release / 'build'
             try:
@@ -588,17 +751,15 @@ class AcpiEnabler:
                 self._die('Podman is required to build fan support without layering host packages')
             if shutil.which('git') is None:
                 self._die('Git is required to download the acpi_call source')
-            os_release = Path('/etc/os-release').read_text(errors='ignore')
-            version_match = re.search(r'^VERSION_ID="?([0-9]+)', os_release, re.M)
-            if not version_match:
-                self._die('Could not determine the Fedora version for the build container')
 
             version, tag = self._resolve_acpi_call_version()
             build_root = self.workdir / 'bazzite-acpi-call-build'
             source_dir = build_root / 'source'
             headers_copy = build_root / 'kernel-devel'
+            output_dir = build_root / 'output'
             shutil.rmtree(build_root, ignore_errors=True)
             build_root.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True)
             try:
                 self._run(
                     ['git', 'clone', '--depth', '1', '--branch', tag,
@@ -610,21 +771,27 @@ class AcpiEnabler:
                     podman, 'run', '--rm', '--pull=missing',
                     '--volume', '%s:/source:Z' % source_dir,
                     '--volume', '%s:/kernel-devel:ro,Z' % headers_copy,
-                    '--volume', '%s:/output:Z' % module_path.parent,
-                    'registry.fedoraproject.org/fedora:%s' % version_match.group(1),
+                    '--volume', '%s:/output:Z' % output_dir,
+                    'registry.fedoraproject.org/fedora:%s' % fedora_version,
                     'bash', '-lc',
                     'dnf install --setopt=install_weak_deps=False -y gcc make '
                     'elfutils-libelf-devel >/dev/null && '
                     'make -C /kernel-devel M=/source modules && '
                     'install -m 0644 /source/acpi_call.ko /output/acpi_call.ko',
                 ])
+                shutil.copyfile(output_dir / 'acpi_call.ko', module_path)
             finally:
                 shutil.rmtree(build_root, ignore_errors=True)
 
+        self._restore_immutable_module_context(module_path)
+        self._install_immutable_module_loader(module_path, fedora_version)
         if not Path('/proc/acpi/call').is_file():
-            self._run(['sudo', '-n', 'insmod', str(module_path)])
-        if not Path('/proc/acpi/call').is_file():
-            self._die('acpi_call loaded without creating /proc/acpi/call')
+            self._die(
+                'The dedicated acpi_call loader service completed but '
+                '/proc/acpi/call is unavailable. Check '
+                'journalctl -u %s and the SELinux audit log.'
+                % self.IMMUTABLE_LOADER_UNIT_NAME
+            )
 
     def _resolve_acpi_call_version(self):
         """Resolve the latest release tag of acpi_call from its git repo.
@@ -1216,7 +1383,8 @@ class AcpiEnabler:
         """
         self._log('Unloading acpi_call module')
         if self.distro_family() in ('bazzite', 'rpm-ostree'):
-            self._run_quiet(['sudo', '-n', 'rmmod', self.ACPI_CALL_MODULE])
+            if not self._selinux_enforcing():
+                self._run_quiet(['sudo', '-n', 'rmmod', self.ACPI_CALL_MODULE])
         else:
             self._run_quiet(['sudo', 'modprobe', '-r', self.ACPI_CALL_MODULE])
 
@@ -1310,6 +1478,7 @@ class AcpiEnabler:
             not self.ACPI_CALL_CONF_PATH.exists()
             and not self._acpi_call_installed(platform.release())
             and not Path('/proc/acpi/call').is_file()
+            and not self.IMMUTABLE_LOADER_UNIT.exists()
         ):
             self._log('acpi_call is not installed on this device -- nothing to disable')
             return
@@ -1321,6 +1490,7 @@ class AcpiEnabler:
             readonly_disabled = True
             self._unload_acpi_call_module()
             if self.distro_family() in ('bazzite', 'rpm-ostree'):
+                self._remove_immutable_module_loader()
                 module_path = self._immutable_module_path()
                 module_path.unlink(missing_ok=True)
                 try:

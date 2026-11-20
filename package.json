@@ -1,6 +1,6 @@
 {
   "name": "legion-center",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0-alpha.2",
   "description": "A Decky Loader plugin for Legion Go (Z1E) controller remapping, fan controls, power LED, and charge limits on SteamOS and Bazzite",
   "type": "module",
   "scripts": {

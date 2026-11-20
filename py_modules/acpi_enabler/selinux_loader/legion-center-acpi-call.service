@@ -1,0 +1,12 @@
+[Unit]
+Description=Load the Legion Center acpi_call module
+ConditionPathExists=/var/lib/legion-center/acpi_call.ko
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/var/lib/legion-center/acpi-call-loader
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

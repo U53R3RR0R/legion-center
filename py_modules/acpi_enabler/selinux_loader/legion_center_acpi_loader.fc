@@ -1,0 +1,3 @@
+/var/lib/legion-center/acpi-call-loader -- gen_context(system_u:object_r:legion_center_acpi_loader_exec_t,s0)
+/var/lib/legion-center -d gen_context(system_u:object_r:legion_center_acpi_dir_t,s0)
+/var/lib/legion-center/acpi_call\.ko -- gen_context(system_u:object_r:legion_center_acpi_module_t,s0)

@@ -1,0 +1,21 @@
+policy_module(legion_center_acpi_loader, 1.0.0)
+
+type legion_center_acpi_loader_t;
+type legion_center_acpi_loader_exec_t;
+init_daemon_domain(legion_center_acpi_loader_t, legion_center_acpi_loader_exec_t)
+
+type legion_center_acpi_dir_t;
+files_type(legion_center_acpi_dir_t)
+
+type legion_center_acpi_module_t;
+files_type(legion_center_acpi_module_t)
+
+require {
+    type var_lib_t;
+}
+
+allow legion_center_acpi_loader_t self:capability sys_module;
+allow legion_center_acpi_loader_t self:system module_load;
+allow legion_center_acpi_loader_t var_lib_t:dir search;
+allow legion_center_acpi_loader_t legion_center_acpi_dir_t:dir search;
+allow legion_center_acpi_loader_t legion_center_acpi_module_t:file { getattr open read };
