@@ -569,6 +569,25 @@ class AcpiEnabler:
         release = kernel_release or platform.release()
         return Path(settings_dir) / 'acpi-call' / release / 'acpi_call.ko'
 
+    def _restore_immutable_module_context(self, module_path):
+        labels = []
+        for path in (module_path.parent, module_path):
+            try:
+                labels.append(os.getxattr(str(path), 'security.selinux').decode(errors='replace'))
+            except OSError:
+                continue
+        if not any('container_file_t' in label for label in labels):
+            return
+
+        restorecon = shutil.which('restorecon')
+        if restorecon is None:
+            self._die(
+                'The module was labeled for container use by an earlier build. '
+                'Install policycoreutils or run restorecon on %s' % module_path.parent
+            )
+        self._log('Restoring the module directory SELinux labels after an earlier container build')
+        self._run(['sudo', '-n', restorecon, '-RF', str(module_path.parent)])
+
     def _install_acpi_call_module_immutable(self):
         kernel_release = platform.release()
         module_path = self._immutable_module_path(kernel_release)
@@ -597,8 +616,10 @@ class AcpiEnabler:
             build_root = self.workdir / 'bazzite-acpi-call-build'
             source_dir = build_root / 'source'
             headers_copy = build_root / 'kernel-devel'
+            output_dir = build_root / 'output'
             shutil.rmtree(build_root, ignore_errors=True)
             build_root.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True)
             try:
                 self._run(
                     ['git', 'clone', '--depth', '1', '--branch', tag,
@@ -610,7 +631,7 @@ class AcpiEnabler:
                     podman, 'run', '--rm', '--pull=missing',
                     '--volume', '%s:/source:Z' % source_dir,
                     '--volume', '%s:/kernel-devel:ro,Z' % headers_copy,
-                    '--volume', '%s:/output:Z' % module_path.parent,
+                    '--volume', '%s:/output:Z' % output_dir,
                     'registry.fedoraproject.org/fedora:%s' % version_match.group(1),
                     'bash', '-lc',
                     'dnf install --setopt=install_weak_deps=False -y gcc make '
@@ -618,11 +639,26 @@ class AcpiEnabler:
                     'make -C /kernel-devel M=/source modules && '
                     'install -m 0644 /source/acpi_call.ko /output/acpi_call.ko',
                 ])
+                shutil.copyfile(output_dir / 'acpi_call.ko', module_path)
             finally:
                 shutil.rmtree(build_root, ignore_errors=True)
 
+        self._restore_immutable_module_context(module_path)
+
         if not Path('/proc/acpi/call').is_file():
-            self._run(['sudo', '-n', 'insmod', str(module_path)])
+            try:
+                self._run(['sudo', '-n', 'insmod', str(module_path)])
+            except RuntimeError as error:
+                if 'Permission denied' in str(error):
+                    self._die(
+                        'The kernel refused to load acpi_call. This can be caused by '
+                        'SELinux labeling from an earlier Legion Center alpha build, '
+                        'Secure Boot/module-signature enforcement, or missing module '
+                        'loading privileges. Retry after updating Legion Center; if it '
+                        'still fails, check the kernel log for the exact denial. Details: %s'
+                        % error
+                    )
+                raise
         if not Path('/proc/acpi/call').is_file():
             self._die('acpi_call loaded without creating /proc/acpi/call')
 

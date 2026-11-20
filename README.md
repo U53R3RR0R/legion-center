@@ -52,7 +52,7 @@ install or an update. Decky Loader must already be installed.
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/U53R3RR0R/legion-center/v0.2.0-alpha.1/install.sh \
+  https://raw.githubusercontent.com/U53R3RR0R/legion-center/v0.2.0-alpha.2/install.sh \
   --output /tmp/install-legion-center.sh &&
 bash /tmp/install-legion-center.sh &&
 rm /tmp/install-legion-center.sh
@@ -67,8 +67,8 @@ the `U53R3RR0R/legion-center` repository.
 
 ### Manual Install
 
-Download `LegionCenter-0.2.0-alpha.1.tar.gz` from the
-[alpha release](https://github.com/U53R3RR0R/legion-center/releases/tag/v0.2.0-alpha.1)
+Download `LegionCenter-0.2.0-alpha.2.tar.gz` from the
+[alpha release](https://github.com/U53R3RR0R/legion-center/releases/tag/v0.2.0-alpha.2)
 to `~/Downloads`, then extract it into
 Decky's plugin directory:
 
@@ -109,7 +109,7 @@ If Decky Loader is configured as a user service instead, use
 - Node.js v16.14+ and pnpm installed
 
 ```bash
-git clone --branch v0.2.0-alpha.1 https://github.com/U53R3RR0R/legion-center.git
+git clone --branch v0.2.0-alpha.2 https://github.com/U53R3RR0R/legion-center.git
 
 cd legion-center
 
@@ -159,8 +159,10 @@ those matching headers to be available. The resulting module is kept under
 Decky's persistent plugin settings and loaded directly; this path does not use
 `rpm-ostree`, layer packages, or write to the host's `/usr` or `/etc`. The
 module is specific to the running kernel, so run **Repair Fan Support** after
-a kernel update. Controller remapping, the power LED, touchpad/gyro, and
-supported charge-limit controls do not require this fan-support backend.
+a kernel update. The installer restores the module directory's SELinux labels
+if an earlier alpha build marked it for container-only use. Controller
+remapping, the power LED, touchpad/gyro, and supported charge-limit controls
+do not require this fan-support backend.
 
 # Troubleshooting / Frequently Asked Questions
 
@@ -170,7 +172,7 @@ First try reinstalling or updating the plugin to the latest version, there's an 
 
 ```bash
 curl --fail --location \
-  https://raw.githubusercontent.com/U53R3RR0R/legion-center/v0.2.0-alpha.1/install.sh \
+  https://raw.githubusercontent.com/U53R3RR0R/legion-center/v0.2.0-alpha.2/install.sh \
   --output /tmp/install-legion-center.sh &&
 bash /tmp/install-legion-center.sh &&
 rm /tmp/install-legion-center.sh

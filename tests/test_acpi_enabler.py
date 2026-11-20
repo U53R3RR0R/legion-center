@@ -79,6 +79,25 @@ class AcpiEnablerTests(unittest.TestCase):
         with patch("pathlib.Path.read_text", return_value=os_release):
             self.assertEqual(enabler.distro_family(), "bazzite")
 
+    def test_immutable_build_repairs_container_selinux_labels(self):
+        enabler = RecordingEnabler()
+        module_dir = Path("/home/user/settings/acpi-call/test-kernel")
+        enabler._run = lambda command: enabler.calls.append(command)
+
+        with patch(
+            "py_modules.acpi_enabler.acpi_enabler.os.getxattr",
+            return_value=b"system_u:object_r:container_file_t:s0",
+        ), patch(
+            "py_modules.acpi_enabler.acpi_enabler.shutil.which",
+            return_value="/usr/bin/restorecon",
+        ):
+            enabler._restore_immutable_module_context(module_dir / "acpi_call.ko")
+
+        self.assertEqual(
+            enabler.calls,
+            [["sudo", "-n", "/usr/bin/restorecon", "-RF", str(module_dir)]],
+        )
+
     def test_run_raises_on_required_command_failure(self):
         enabler = RecordingEnabler()
         failed = SimpleNamespace(returncode=9, stdout="", stderr="bad command")
